@@ -29,7 +29,7 @@ class TrainDatasetLoader(Dataset):
         get_n_most_prob_faces: Retrieves the n most probable positive samples based on provided probabilities.
         get_all_train_faces: Retrieves all positive training samples.
     """
-    def __init__(self, data_path, channels_last=True):
+    def __init__(self, data_path, channels_last=False):
         print(f"Opening {data_path}")
         self.cache = h5py.File(data_path, "r")
         self.images = self.cache["images"][:]

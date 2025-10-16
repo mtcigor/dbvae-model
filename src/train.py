@@ -1,7 +1,14 @@
+import sys
+from pathlib import Path
+
+# Make the project root importable when running this file directly
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from utils.datasetLoader import TrainDatasetLoader
 import numpy as np
 from tqdm import tqdm
-from pathlib import Path
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
@@ -28,7 +35,7 @@ def get_loader_and_faces():
         print(f"Downloading training data to {path_to_training_data}")
         url = "https://www.dropbox.com/s/hlz8atheyozp1yx/train_face.h5?dl=1"
         torch.hub.download_url_to_file(url, str(path_to_training_data))
-    loader = TrainDatasetLoader(str(path_to_training_data), channels_last=True)
+    loader = TrainDatasetLoader(str(path_to_training_data), channels_last=False)
     all_faces = loader.get_all_train_faces()
     return loader, all_faces
 
@@ -50,7 +57,7 @@ def get_latent_mu(images, dbvae, batch_size=64):
         for start in range(0, len(images_t), batch_size):
             end = start + batch_size
             batch = images_t[start:end].to(device).permute(0, 3, 1, 2)
-            _, z_mean, _ = dbvae(batch)
+            _, z_mean, _, _ = dbvae(batch)
             all_z_mean.append(z_mean.detach().cpu())
     
     print("Number of batches:", len(all_z_mean))
@@ -58,13 +65,14 @@ def get_latent_mu(images, dbvae, batch_size=64):
     mu = z_mean_full.numpy()
     return mu
 
-def get_training_sample_prob(images, dbvae, bins=10, smoothing_fac=0.001):
+def get_training_sample_prob(images, dbvae, batch_size, bins=10, smoothing_fac=0.001):
     """
     Calculates the probability chance of images under represented in the latent variables
     distribution, favoring images who are rarer in the distribution.
     Args:
         images (np.ndarray): Input images sample.
         dbvae (DB_VAE): Debiased VAE model.
+        batch_size (int): Batch size for processing images.
         bins (int): Number of histogram intervals used to estimate the latent variable distribution along each dimension.
         smoothing_fac (float): Small float value to avoid zeros
     Returns:
@@ -72,7 +80,7 @@ def get_training_sample_prob(images, dbvae, bins=10, smoothing_fac=0.001):
     """
     print("Recomputing the sample probabilities")
 
-    mu = get_latent_mu(images, dbvae)
+    mu = get_latent_mu(images, dbvae, batch_size)
     training_sample_p = np.zeros(mu.shape[0], dtype=np.float64)
 
     for i in range(dbvae.latent_dim):
@@ -97,14 +105,6 @@ def get_training_sample_prob(images, dbvae, bins=10, smoothing_fac=0.001):
     training_sample_p /= np.sum(training_sample_p)
     return training_sample_p
 
-# Hyperparameters
-params = dict(
-    batch_size=32,
-    learning_rate=5e-4,
-    latent_dim=144,
-    num_epochs=2,
-)
-
 def debiasing_train_step(x, y, dbvae, optimizer):
     """
     Single training step for the DB-VAE model.
@@ -118,12 +118,12 @@ def debiasing_train_step(x, y, dbvae, optimizer):
     """
     optimizer.zero_grad()
     y_logit, z_mean, z_logsigma, x_recon = dbvae(x)
-    loss, _ = debiasing_loss_function(x, x_recon, y, y_logit, z_mean, z_logsigma)
+    loss, class_loss = debiasing_loss_function(x, x_recon, y, y_logit, z_mean, z_logsigma)
     loss.backward()
     optimizer.step()
     return loss
 
-def create_model_and_optimizer(latent_dim=144, learning_rate=5e-4):
+def create_model_and_optimizer(latent_dim=128, learning_rate=5e-4):
     dbvae = DB_VAE(latent_dim).to(device)
     optimizer = optim.Adam(dbvae.parameters(), lr=learning_rate)
     return dbvae, optimizer
@@ -143,14 +143,14 @@ def save_checkpoint(dbvae, optimizer, epoch, output_dir):
     torch.save(ckpt, output_dir / f"dbvae_epoch_{epoch}.pt")
     torch.save(ckpt, output_dir / "dbvae_latest.pt")
 
-def run_training(num_epochs=2, batch_size=32, learning_rate=5e-4, latent_dim=144, bins=10, smoothing_fac=0.001, output_dir="checkpoints", save_every=1):
+def run_training(num_epochs=2, batch_size=64, learning_rate=5e-4, latent_dim=128, bins=10, smoothing_fac=0.001, output_dir="checkpoints", save_every=1):
     loader, all_faces = get_loader_and_faces()
     dbvae, optimizer = create_model_and_optimizer(latent_dim=latent_dim, learning_rate=learning_rate)
 
     step = 0
     for i in range(num_epochs):
         print(f"Starting epoch {i+1}/{num_epochs}")
-        p_faces = get_training_sample_prob(all_faces, dbvae, bins=bins, smoothing_fac=smoothing_fac)
+        p_faces = get_training_sample_prob(all_faces, dbvae, batch_size, bins=bins, smoothing_fac=smoothing_fac)
 
         for _ in tqdm(range(len(loader)//batch_size)):
             x, y = loader.get_batch(batch_size, p_pos=p_faces)
@@ -158,6 +158,8 @@ def run_training(num_epochs=2, batch_size=32, learning_rate=5e-4, latent_dim=144
             y = torch.from_numpy(y).float().to(device)
 
             loss = debiasing_train_step(x, y, dbvae, optimizer)
+            if step % 100 == 0:
+                print(f"Step {step}, Loss: {loss.item():.4f}")
               
             step += 1
         if ((i + 1) % save_every) == 0:
@@ -166,9 +168,9 @@ def run_training(num_epochs=2, batch_size=32, learning_rate=5e-4, latent_dim=144
 def main():
     parser = argparse.ArgumentParser(description="Train DB-VAE")
     parser.add_argument("--epochs", type=int, default=2, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument("--learning-rate", type=float, default=5e-4, help="Learning rate")
-    parser.add_argument("--latent-dim", type=int, default=144, help="Latent dimension")
+    parser.add_argument("--latent-dim", type=int, default=128, help="Latent dimension")
     parser.add_argument("--bins", type=int, default=10, help="Histogram bins for debiasing")
     parser.add_argument("--smoothing-fac", type=float, default=0.001, help="Histogram smoothing factor")
     parser.add_argument("--output-dir", type=str, default="checkpoints", help="Directory to save checkpoints")

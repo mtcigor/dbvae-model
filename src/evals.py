@@ -23,7 +23,8 @@ def get_test_faces(channels_last = True):
     """
     images = {"LF": [], "LM": [], "DF": [], "DM": []}
     for key in images.keys():
-        FILES_PATH = Path.cwd().parent / "data"/ "faces"/ key/ "*.png"
+        FILES_PATH =  Path("data") / "faces" / key / "*.png"
+        print("Loading test faces files from ", FILES_PATH)
         files = glob.glob(str(FILES_PATH))
         for file in sorted(files):
             image = cv2.resize(cv2.imread(file), (64,64))[:,:,::-1] / 255.0
@@ -61,4 +62,4 @@ xx = np.arange(len(keys))
 dbvae_probs_mean = dbvae_probs_array.reshape(len(keys), -1).mean(axis=1)
 
 for i in range(len(keys)):
-    print("Test Sample of ", keys[i], "got an Accuracy of ", dbvae_probs_mean[i])
+    print(f"Test Sample of {keys[i]} got an Accuracy of {dbvae_probs_mean[i].item():.4f}")

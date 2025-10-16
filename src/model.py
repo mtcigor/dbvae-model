@@ -100,7 +100,7 @@ def debiasing_loss_function(x, x_pred, y, y_logits, mu, logsigma, kl_weight=0.00
     y.float()
     face_indicator = (y == 1.0).float()
 
-    total_loss = torch.mean(classification_loss * face_indicator + vae_loss) #If face_indicator == 0, it will not consider the vae_loss since is not a face
+    total_loss = torch.mean(classification_loss * face_indicator + vae_loss)
 
     return total_loss, classification_loss
 
