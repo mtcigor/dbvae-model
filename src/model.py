@@ -73,8 +73,7 @@ def sampling_reparameterization(mu, logsima):
         torch.Tensor: Sampled latent variable.
     """
     eps = torch.randn_like(mu)
-    sigma = torch.exp(0.5 * logsima)
-    print(mu.shape, sigma.shape, eps.shape)
+    sigma = torch.exp(logsima)
     return mu + sigma * eps
 
 def debiasing_loss_function(x, x_pred, y, y_logits, mu, logsigma, kl_weight=0.0005):
@@ -89,18 +88,19 @@ def debiasing_loss_function(x, x_pred, y, y_logits, mu, logsigma, kl_weight=0.00
             y_logits (torch.Tensor): Predicted logits from the classifier.
             mu (torch.Tensor): Mean of the latent variable distribution.
             logsigma (torch.Tensor): Log variance of the latent variable distribution.
+            kl_weight (float): Weight for the KL divergence loss term.
         Returns:
             torch.Tensor: Total loss (classification + VAE loss for faces).
             torch.tensor: Classification loss.
     """
     vae_loss = vae_loss_function(x, x_pred, mu, logsigma, kl_weight)
-    classification_loss = F.binary_cross_entropy_with_logits(y_logits, y)
+    classification_loss = F.binary_cross_entropy_with_logits(y_logits, y, reduction='none')
 
     #Which training data are images of faces
     y.float()
     face_indicator = (y == 1.0).float()
 
-    total_loss = torch.mean(classification_loss + face_indicator * vae_loss) #If face_indicator == 0, it will not consider the vae_loss since is not a face
+    total_loss = torch.mean(classification_loss * face_indicator + vae_loss) #If face_indicator == 0, it will not consider the vae_loss since is not a face
 
     return total_loss, classification_loss
 
@@ -144,7 +144,7 @@ def make_face_decoder_network(latent_dim=128, n_filters=12):
                     out_channels=self.n_filters,
                     kernel_size=5,
                     stride=2,
-                    padding=1,
+                    padding=2,
                     output_padding=1,
                 ),
                 nn.ReLU(),
@@ -153,7 +153,7 @@ def make_face_decoder_network(latent_dim=128, n_filters=12):
                     out_channels=3,
                     kernel_size=5,
                     stride=2,
-                    padding=1,
+                    padding=2,
                     output_padding=1,
                 ),
             )
@@ -180,7 +180,7 @@ class DB_VAE(nn.Module):
         self.in_channels = in_channels
         self.H = H
         self.W = W
-        self.encoder = make_standard_classifier(n_outputs + 2 * latent_dim+1, in_channels, H, W, n_filters)
+        self.encoder = make_standard_classifier(2 * latent_dim+1, in_channels, H, W, n_filters)
         self.decoder = make_face_decoder_network(latent_dim=latent_dim)
 
     def encode(self, x):
