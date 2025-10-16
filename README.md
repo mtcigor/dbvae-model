@@ -1,4 +1,4 @@
-# Debiasing Varitional Autoencoder Model
+# Debiasing Variational Autoencoder Model
 
 This project implements and trains a DB-VAE model based on one of the MIT Introduction to Deep Learning exercises.
 
